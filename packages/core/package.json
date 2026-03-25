@@ -1,0 +1,60 @@
+{
+  "name": "@comptext/core",
+  "version": "1.0.0",
+  "description": "CompText DSL — Clinical AI token preprocessing pipeline with GDPR-compliant PHI scrubbing",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./fhir": {
+      "import": "./dist/fhir.mjs",
+      "require": "./dist/fhir.js",
+      "types": "./dist/fhir.d.ts"
+    },
+    "./benchmarks": {
+      "import": "./dist/benchmarks.mjs",
+      "require": "./dist/benchmarks.js",
+      "types": "./dist/benchmarks.d.ts"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup src/index.ts --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "comptext",
+    "fhir",
+    "hl7",
+    "medical-ai",
+    "token-optimization",
+    "phi-scrubbing",
+    "gdpr",
+    "nlp",
+    "clinical-nlp",
+    "medgemma",
+    "llm"
+  ],
+  "dependencies": {},
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "peerDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/akoellnberger/comptext"
+  },
+  "homepage": "https://github.com/akoellnberger/comptext#readme",
+  "bugs": {
+    "url": "https://github.com/akoellnberger/comptext/issues"
+  }
+}

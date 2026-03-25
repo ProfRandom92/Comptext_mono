@@ -1,0 +1,21 @@
+{
+  "name": "comptext-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "CompText — Domain-Specific Language for Clinical AI Preprocessing",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces --if-present",
+    "dev": "npm run dev -w packages/visualizer",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint packages/*/src"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Alex Köllnberger",
+  "license": "MIT"
+}
