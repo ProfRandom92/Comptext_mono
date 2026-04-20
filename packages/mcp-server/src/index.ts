@@ -27,6 +27,14 @@ server.tool(
       ? ALL_FHIR_BUNDLES[scenario]
       : (bundle as FHIRBundle)
 
+    const size = JSON.stringify(input).length
+    if (size > 2_000_000) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Bundle zu groß (${(size / 1e6).toFixed(1)} MB, max 2 MB)` }],
+      }
+    }
+
     try {
       const result = await pipeline(input)
       return {

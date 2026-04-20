@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # CompText — Termux Offline Setup
 # Usage: bash termux-setup.sh
 set -euo pipefail
@@ -38,10 +38,10 @@ npm install --prefer-offline --no-audit --no-fund 2>&1 | grep -v "^npm warn"
 
 # 4. Build all packages
 echo "[4/5] Building packages..."
-npm run build -w packages/core        2>&1 | grep -E "Build success|error" || true
-npm run build -w packages/cli         2>&1 | grep -E "Build success|error" || true
-npm run build -w packages/mcp-server  2>&1 | grep -E "Build success|error" || true
-npm run build -w packages/visualizer  2>&1 | grep -E "Build success|error" || true
+npm run build -w packages/core        || { echo "FEHLER: packages/core build fehlgeschlagen"; exit 1; }
+npm run build -w packages/cli         || { echo "FEHLER: packages/cli build fehlgeschlagen"; exit 1; }
+npm run build -w packages/mcp-server  || { echo "FEHLER: packages/mcp-server build fehlgeschlagen"; exit 1; }
+npm run build -w packages/visualizer  || { echo "FEHLER: packages/visualizer build fehlgeschlagen"; exit 1; }
 
 # 5. Link CLI globally
 echo "[5/5] Linking comptext CLI..."

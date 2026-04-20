@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { pipeline, FHIR_STEMI, FHIR_SEPSIS, FHIR_STROKE, FHIR_ANAPHYLAXIE, FHIR_DM_HYPO, serializeFrame } from "../src/index.js"
+import { pipeline, FHIR_STEMI, FHIR_SEPSIS, FHIR_STROKE, FHIR_ANAPHYLAXIE, FHIR_DM_HYPO, serializeFrame, CompTextError } from "../src/index.js"
 import { runNURSE } from "../src/compiler/nurse.js"
 import { runKVTC } from "../src/compiler/kvtc.js"
 
@@ -223,5 +223,29 @@ describe("serializeFrame", () => {
     const ct = serializeFrame(result.frame)
     const fhirJson = JSON.stringify(FHIR_STEMI)
     expect(ct.length).toBeLessThan(fhirJson.length)
+  })
+})
+
+// ─── Error Handling ────────────────────────────────────────────────────────────
+
+describe("error handling", () => {
+  it("throws NO_RESOURCES for empty entry array", async () => {
+    await expect(pipeline({ ...FHIR_STEMI, entry: [] }))
+      .rejects.toMatchObject({ code: "NO_RESOURCES" })
+  })
+
+  it("throws INVALID_FHIR for wrong resourceType", async () => {
+    await expect(pipeline({ ...FHIR_STEMI, resourceType: "Patient" as never }))
+      .rejects.toMatchObject({ code: "INVALID_FHIR" })
+  })
+
+  it("handles bundle with only a Patient resource (no observations)", async () => {
+    const patientOnly = {
+      ...FHIR_STEMI,
+      entry: FHIR_STEMI.entry.filter(e => e.resource.resourceType === "Patient"),
+    }
+    const result = await pipeline(patientOnly)
+    expect(result.frame).toBeDefined()
+    expect(result.benchmark.gdpr_compliant).toBe(true)
   })
 })

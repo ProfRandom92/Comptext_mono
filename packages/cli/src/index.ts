@@ -149,10 +149,11 @@ function cmdServe(portArg?: string) {
     res.end(readFileSync(filePath))
   })
 
-  server.listen(port, "127.0.0.1", () => {
-    console.log(`\nCompText Visualizer running at:`)
-    console.log(`  http://localhost:${port}\n`)
-    console.log("Press Ctrl+C to stop.")
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`\nCompText Visualizer:`)
+    console.log(`  http://127.0.0.1:${port}   (lokal)`)
+    console.log(`  http://localhost:${port}     (Browser)\n`)
+    console.log("Ctrl+C zum Beenden.")
   })
 }
 

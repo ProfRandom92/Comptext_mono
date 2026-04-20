@@ -187,6 +187,7 @@ export interface PipelineResult {
     total_ms: number
     reduction_pct: number
     gdpr_compliant: boolean
+    phi_fields_scrubbed: number
   }
 }
 

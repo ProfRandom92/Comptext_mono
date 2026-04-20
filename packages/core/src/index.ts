@@ -99,6 +99,7 @@ export async function pipeline(bundle: FHIRBundle): Promise<PipelineResult> {
       total_ms: meta.total_ms,
       reduction_pct: meta.reduction_pct,
       gdpr_compliant: frame.gdpr.art9 && frame.gdpr.minimized,
+      phi_fields_scrubbed: nurse.phi_fields_removed,
     },
   }
 }
