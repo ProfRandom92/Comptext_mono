@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import {
   pipeline, serializeFrame,
   FHIR_STEMI, FHIR_SEPSIS, FHIR_STROKE, FHIR_ANAPHYLAXIE, FHIR_DM_HYPO,
@@ -58,6 +58,18 @@ const VS_LABELS: Record<string, { label: string; unit: string; critLow?: number;
   map:  { label: "MAP",   unit: "mmHg",  critLow: 65 },
 }
 
+const SEV_LABELS: Record<string, string> = {
+  I: "Grad I — mild", II: "Grad II — moderat",
+  III: "Grad III — schwer", IV: "Grad IV — anaphylaktisch",
+}
+
+const LAB_THRESHOLDS: Record<string, [number, number]> = {
+  hs_tni: [52, Infinity], ckmb: [10, Infinity],
+  pct: [2, Infinity],     lactate: [2, Infinity],
+  glucose: [3, 20],       egfr: [-Infinity, 15],
+  hb: [-Infinity, 7],
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function isCriticalVital(key: string, value: number): boolean {
   const meta = VS_LABELS[key]
@@ -68,13 +80,7 @@ function isCriticalVital(key: string, value: number): boolean {
 }
 
 function isCriticalLab(key: string, value: number): "high" | "low" | null {
-  const thresholds: Record<string, [number, number]> = {
-    hs_tni: [52, Infinity], ckmb: [10, Infinity],
-    pct: [2, Infinity],     lactate: [2, Infinity],
-    glucose: [3, 20],       egfr: [-Infinity, 15],
-    hb: [-Infinity, 7],
-  }
-  const t = thresholds[key]
+  const t = LAB_THRESHOLDS[key]
   if (!t) return null
   if (value > t[1]) return "high"
   if (value < t[0]) return "low"
@@ -89,14 +95,18 @@ function fmtNum(n: number | undefined): string {
 // ── Syntax-highlighted DSL ─────────────────────────────────────────────────────
 function DSLOutput({ text, tri }: { text: string; tri: string }) {
   const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const copy = () => {
     navigator.clipboard.writeText(text)
     setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => setCopied(false), 1500)
   }
 
-  const highlighted = text.split("\n").map((line, i) => {
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  const highlighted = useMemo(() => text.split("\n").map((line, i) => {
     if (line.startsWith("CT:")) {
       // Color the TRI: part
       const parts = line.split(" ")
@@ -128,7 +138,7 @@ function DSLOutput({ text, tri }: { text: string; tri: string }) {
         })}
       </div>
     )
-  })
+  }), [text, tri])
 
   return (
     <div className="panel" style={{ marginBottom: 16 }}>
@@ -147,20 +157,19 @@ function DSLOutput({ text, tri }: { text: string; tri: string }) {
 
 // ── Pipeline Flow ──────────────────────────────────────────────────────────────
 function PipelineFlow({ result, benchKey }: { result: PipelineResult; benchKey: string }) {
-  const scenarioId = benchKey
-  const bench = TOKEN_BENCHMARKS[scenarioId]
+  const bench = TOKEN_BENCHMARKS[benchKey]
   const raw  = result.input.token_count
   const nurse= result.nurse.token_out
   const kvtc = result.kvtc.token_out
   const frame= result.frame._pipe?.tok_out ?? (bench?.gpt4_comptext ?? 112)
 
-  const stages = [
+  const stages = useMemo(() => [
     { label: "Stage 0", name: "FHIR Bundle",    tokens: raw,   cls: "raw",   desc: `${(result.input.fhir_bytes / 1024).toFixed(1)} KB JSON` },
     { label: "Stage 1", name: "NURSE",           tokens: nurse, cls: "nurse", desc: `${result.nurse.phi_fields_removed} PHI-Felder entfernt`, reduction: result.nurse.token_in > 0 ? ((1 - nurse / raw) * 100).toFixed(1) : null },
     { label: "Stage 2", name: "KVTC",            tokens: kvtc,  cls: "kvtc",  desc: "4-Layer Kompression", reduction: ((1 - kvtc / nurse) * 100).toFixed(1) },
     { label: "Stage 3", name: "Frame Assembly",  tokens: frame, cls: "frame", desc: `${result.frame.icd.length} ICD-10, ${result.frame.alg.length} ALG`, reduction: ((1 - frame / kvtc) * 100).toFixed(1) },
     { label: "Output",  name: "DSL String",      tokens: bench?.gpt4_comptext ?? frame, cls: "dsl", desc: "→ MedGemma 27B input", reduction: result.benchmark.reduction_pct.toFixed(1) },
-  ]
+  ], [result, bench, raw, nurse, kvtc, frame])
 
   return (
     <div className="pipeline-flow">
@@ -210,7 +219,7 @@ function KVTCPanel({ result }: { result: PipelineResult }) {
       <div className="layer-content">
         {activeLayer === "K" && (
           <>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: 8 }}>LOINC → CompText Schlüssel ({layer_k.pairs.length} Pairs, −{layer_k.token_saved} tok)</div>
+            <div className="text-muted-sm" style={{ marginBottom: 8 }}>LOINC → CompText Schlüssel ({layer_k.pairs.length} Pairs, −{layer_k.token_saved} tok)</div>
             {layer_k.pairs.map((p) => (
               <div key={p.loinc} className="kv-row">
                 <div>
@@ -227,7 +236,7 @@ function KVTCPanel({ result }: { result: PipelineResult }) {
         )}
         {activeLayer === "V" && (
           <>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: 8 }}>SI-Normalisierung + Kompaktnotation (−{layer_v.token_saved} tok)</div>
+            <div className="text-muted-sm" style={{ marginBottom: 8 }}>SI-Normalisierung + Kompaktnotation (−{layer_v.token_saved} tok)</div>
             {layer_v.normalized.map((n) => (
               <div key={n.key} className="kv-row">
                 <span className="kv-key">{n.key}</span>
@@ -241,7 +250,7 @@ function KVTCPanel({ result }: { result: PipelineResult }) {
         )}
         {activeLayer === "T" && (
           <>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: 8 }}>FHIR ResourceType → CompText Code (−{layer_t.token_saved} tok)</div>
+            <div className="text-muted-sm" style={{ marginBottom: 8 }}>FHIR ResourceType → CompText Code (−{layer_t.token_saved} tok)</div>
             {Object.entries(layer_t.encoded).map(([from, to]) => (
               <div key={from} className="type-row">
                 <span className="type-from">{from}</span>
@@ -254,7 +263,7 @@ function KVTCPanel({ result }: { result: PipelineResult }) {
         )}
         {activeLayer === "C" && (
           <>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: 10 }}>Klinische Abkürzungen (−{layer_c.token_saved} tok)</div>
+            <div className="text-muted-sm" style={{ marginBottom: 10 }}>Klinische Abkürzungen (−{layer_c.token_saved} tok)</div>
             {layer_c.narrative ? (
               <div className="ctx-compressed">{layer_c.narrative}</div>
             ) : (
@@ -287,13 +296,13 @@ function NURSEPanel({ result }: { result: PipelineResult }) {
             <div className="phi-stat-label">Ressourcen erhalten</div>
           </div>
         </div>
-        <div style={{ fontSize: "0.7rem", color: "var(--text-dim)", marginBottom: 6, fontFamily: "var(--mono)" }}>
+        <div className="text-dim-sm" style={{ marginBottom: 6, fontFamily: "var(--mono)" }}>
           PHI Hash: {nurse.phi_hash} (FNV-1a, not reversible)
         </div>
         <div className="resource-list">
-          {nurse.resources.map((r, i) => (
-            <div key={i} className="resource-item">
-              <span className={`resource-type ${r.type.replace("MedicationStatement", "MedicationStatement")}`}>
+          {nurse.resources.map((r) => (
+            <div key={r.id_hash} className="resource-item">
+              <span className={`resource-type ${r.type}`}>
                 {r.type === "MedicationStatement" ? "MED" : r.type.toUpperCase()}
               </span>
               <span className="resource-hash">{r.id_hash}</span>
@@ -316,7 +325,6 @@ function NURSEPanel({ result }: { result: PipelineResult }) {
 // ── Safety Alerts Panel ────────────────────────────────────────────────────────
 function SafetyAlertsPanel({ result }: { result: PipelineResult }) {
   const { frame } = result
-  const SEV_LABELS: Record<string, string> = { "I": "Grad I — mild", "II": "Grad II — moderat", "III": "Grad III — schwer", "IV": "Grad IV — anaphylaktisch" }
 
   return (
     <div className="panel">
@@ -328,8 +336,8 @@ function SafetyAlertsPanel({ result }: { result: PipelineResult }) {
         {frame.alg.length === 0 && frame.rx.length === 0 && (
           <div style={{ color: "var(--text-dim)", fontSize: "0.8rem" }}>Keine Safety-Alerts</div>
         )}
-        {frame.alg.map((alg, i) => (
-          <div key={i} className="alert-card allergy">
+        {frame.alg.map((alg) => (
+          <div key={alg.ag} className="alert-card allergy">
             <div className="alert-icon">⚠️</div>
             <div className="alert-content">
               <div className="alert-name">
@@ -347,8 +355,8 @@ function SafetyAlertsPanel({ result }: { result: PipelineResult }) {
             </div>
           </div>
         ))}
-        {frame.rx.map((rx, i) => (
-          <div key={i} className="alert-card medication">
+        {frame.rx.map((rx) => (
+          <div key={rx.name} className="alert-card medication">
             <div className="alert-icon">💊</div>
             <div className="alert-content">
               <div className="alert-name">{rx.name} <span className="tag tag-blue" style={{ fontSize: "0.65rem" }}>ATC:{rx.atc}</span></div>
@@ -369,8 +377,8 @@ function SafetyAlertsPanel({ result }: { result: PipelineResult }) {
 // ── Vitals + Labs Panel ────────────────────────────────────────────────────────
 function VitalsLabsPanel({ result }: { result: PipelineResult }) {
   const { vs, lab } = result.frame
-  const vitals = Object.entries(vs).filter(([, v]) => v !== undefined) as [string, number][]
-  const labs = Object.entries(lab).filter(([, v]) => v !== undefined) as [string, number][]
+  const vitals = useMemo(() => Object.entries(vs).filter(([, v]) => v !== undefined) as [string, number][], [vs])
+  const labs = useMemo(() => Object.entries(lab).filter(([, v]) => v !== undefined) as [string, number][], [lab])
 
   return (
     <>
@@ -486,7 +494,7 @@ function ContextPanel({ result }: { result: PipelineResult }) {
       <div className="panel-body">
         {result.frame.icd.length > 0 && (
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: 6 }}>ICD-10</div>
+            <div className="text-muted-sm" style={{ marginBottom: 6 }}>ICD-10</div>
             <div className="icd-list">
               {result.frame.icd.map(c => <span key={c} className="icd-code">{c}</span>)}
             </div>
@@ -494,7 +502,7 @@ function ContextPanel({ result }: { result: PipelineResult }) {
         )}
         {result.frame.ctx && (
           <div>
-            <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: 6 }}>Komprimierter Kontext</div>
+            <div className="text-muted-sm" style={{ marginBottom: 6 }}>Komprimierter Kontext</div>
             <div className="ctx-compressed">{result.frame.ctx}</div>
           </div>
         )}

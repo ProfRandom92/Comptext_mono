@@ -41,6 +41,10 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); line
 .header-logo span { font-size: 0.75rem; background: var(--green-dim); color: var(--green); padding: 2px 8px; border-radius: 99px; border: 1px solid rgba(63,185,80,0.3); }
 .header-meta { font-size: 0.75rem; color: var(--text-muted); }
 
+/* ── Utility ─────────────────────────── */
+.text-dim-sm { font-size: 0.7rem; color: var(--text-dim); }
+.text-muted-sm { font-size: 0.7rem; color: var(--text-muted); }
+
 /* ── Scenario Selector ───────────────── */
 .scenario-selector { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
 .scenario-btn {
