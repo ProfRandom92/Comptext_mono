@@ -12,7 +12,11 @@
     "dev": "npm run dev -w packages/visualizer",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "benchmark": "tsx scripts/benchmark.ts",
-    "lint": "eslint packages/*/src"
+    "lint": "eslint packages/*/src",
+    "termux:run": "node packages/cli/dist/index.js run",
+    "termux:serve": "node packages/cli/dist/index.js serve",
+    "termux:benchmark": "node packages/cli/dist/index.js benchmark",
+    "termux:mcp": "node packages/mcp-server/dist/index.js"
   },
   "engines": {
     "node": ">=18.0.0"

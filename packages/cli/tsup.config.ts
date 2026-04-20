@@ -4,6 +4,8 @@ export default defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
   target: "node18",
+  bundle: true,
   clean: true,
   sourcemap: false,
+  banner: { js: "#!/usr/bin/env node" },
 })
