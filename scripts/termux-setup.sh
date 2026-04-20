@@ -12,6 +12,7 @@ else
 fi
 
 REPO_URL="${REPO_URL:-https://github.com/ProfRandom92/Comptext_mono.git}"
+BRANCH="${BRANCH:-main}"
 INSTALL_DIR="$HOME/comptext"
 
 echo ""
@@ -46,13 +47,15 @@ echo -e "${BOLD}[2/5]${RESET} Repository einrichten..."
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "      ${DIM}Bestehende Installation gefunden — aktualisiere...${RESET}"
   cd "$INSTALL_DIR"
-  git pull --ff-only 2>/dev/null || echo -e "      ${YELLOW}(Pull fehlgeschlagen — nutze vorhandene Version)${RESET}"
+  git fetch origin "$BRANCH" 2>/dev/null || true
+  git checkout "$BRANCH" 2>/dev/null || true
+  git pull --ff-only origin "$BRANCH" 2>/dev/null || echo -e "      ${YELLOW}(Pull fehlgeschlagen — nutze vorhandene Version)${RESET}"
 else
-  echo -e "      ${DIM}Klone von GitHub...${RESET}"
-  git clone "$REPO_URL" "$INSTALL_DIR"
+  echo -e "      ${DIM}Klone Branch '${BRANCH}' von GitHub...${RESET}"
+  git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
 fi
-echo -e "      ${GREEN}✓${RESET} Repository bereit: $INSTALL_DIR"
+echo -e "      ${GREEN}✓${RESET} Repository bereit: $INSTALL_DIR (Branch: $BRANCH)"
 
 # 3. npm-Abhängigkeiten installieren
 echo -e "${BOLD}[3/5]${RESET} npm-Abhängigkeiten installieren..."
