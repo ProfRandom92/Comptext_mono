@@ -1,0 +1,16 @@
+{
+  "name": "@comptext/scripts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "benchmark": "tsx benchmark.ts"
+  },
+  "dependencies": {
+    "@comptext/core": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}
