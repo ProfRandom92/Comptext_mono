@@ -11,6 +11,7 @@
     "test": "npm run test --workspaces --if-present",
     "dev": "npm run dev -w packages/visualizer",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "benchmark": "tsx scripts/benchmark.ts",
     "lint": "eslint packages/*/src"
   },
   "engines": {
