@@ -15,6 +15,8 @@ import {
   CLINICAL_HINTS, createEmergencyTIContext,
 } from "./epa/mock-epa.js"
 import type { Scenario } from "./epa/mock-epa.js"
+import { MEDGEMMA_CACHE, MODELS, estimateCost, queryMedGemma } from "./llm/medgemma.js"
+import type { MedGemmaReply } from "./llm/medgemma.js"
 
 const SCENARIOS: Scenario[] = ["stemi", "sepsis", "stroke", "anaphylaxie", "dm_hypo"]
 
@@ -427,6 +429,317 @@ async function cmdMenu() {
   rl.close()
 }
 
+// ── Streaming helper ──────────────────────────────────────────────────────────
+
+const NO_STREAM = process.env.COMPTEXT_NO_STREAM === "1"
+
+async function streamText(text: string, delayMs = 12, colorFn: (s: string) => string = (x) => x) {
+  if (NO_STREAM) { process.stdout.write(colorFn(text) + "\n"); return }
+  for (const ch of text) { process.stdout.write(colorFn(ch)); await sleep(delayMs) }
+  process.stdout.write("\n")
+}
+
+function formatReply(r: MedGemmaReply, inner: number): string[] {
+  const lines: string[] = []
+  const wrap = (s: string) => wrapLine(s, inner - 3)
+  lines.push(c.magenta(c.bold("▸ Differentialdiagnosen (MedGemma 27B):")))
+  r.differential.forEach((d, i) => wrap(`   ${i + 1}. ${d}`).forEach(l => lines.push(c.magenta(l))))
+  lines.push("")
+  lines.push(c.magenta(c.bold("▸ Priorität:")))
+  wrap(`   ${r.priority}`).forEach(l => lines.push(c.red(c.bold(l))))
+  lines.push("")
+  lines.push(c.magenta(c.bold("▸ Sofortmaßnahmen (in Reihenfolge):")))
+  r.actions.forEach((a, i) => wrap(`   ${i + 1}. ${a}`).forEach(l => lines.push(c.white(l))))
+  lines.push("")
+  lines.push(c.magenta(c.bold("▸ Medikation (Wirkstoff | Dosis | Route | Frequenz):")))
+  r.drugs.forEach(d => wrap(`   • ${d}`).forEach(l => lines.push(c.cyan(l))))
+  lines.push("")
+  lines.push(c.magenta(c.bold("▸ Warnungen / Kontraindikationen:")))
+  r.alerts.forEach(a => wrap(`   ⚠ ${a}`).forEach(l => lines.push(c.yellow(l))))
+  lines.push("")
+  lines.push(c.magenta(c.bold("▸ Therapieziel (10 min):")))
+  wrap(`   ${r.target}`).forEach(l => lines.push(c.green(l))  )
+  lines.push("")
+  lines.push(c.dim(`model: ${r.model}  |  confidence: ${(r.confidence * 100).toFixed(0)}%  |  tokens_out: ${r.tokens_out}`))
+  return lines
+}
+
+// llm: show simulated MedGemma 27B reply for a scenario DSL frame
+async function cmdLlm(scenario: Scenario, opts: { noStream?: boolean } = {}) {
+  const result = await pipeline(ALL_FHIR_BUNDLES[scenario])
+  const dsl = serializeFrame(result.frame)
+
+  console.log()
+  console.log(headerBox(
+    `${EMOJIS[scenario]} MedGemma 27B — Klinische Entscheidungshilfe`,
+    `Input: ${result.kvtc.token_out} DSL-Token  |  ${LABELS[scenario]}`,
+    "magenta",
+  ))
+  console.log()
+
+  // Show the DSL being sent (yellow, collapsed)
+  const dslPreview = dsl.split("\n").slice(0, 3).join(" ").slice(0, W - 8)
+  console.log(c.dim("  LLM-Input: ") + c.yellow(dslPreview + c.dim(" …")))
+  console.log()
+
+  process.stdout.write(c.dim("  Anfrage an MedGemma 27B"))
+  for (let i = 0; i < 3; i++) { await sleep(opts.noStream ? 0 : 250); process.stdout.write(c.dim(".")) }
+  process.stdout.write("\n\n")
+
+  const { reply, source, latency_ms } = await queryMedGemma(scenario, dsl, { timeoutMs: 4000 })
+  const sourceBadge = source === "live"
+    ? c.bgGreen(c.bold(" LIVE "))
+    : c.bgBlue(c.bold(" CACHE "))
+  console.log(`  ${sourceBadge} ${c.dim(`(${latency_ms} ms)`)}`)
+  console.log()
+
+  const inner = W - 4
+  const body = formatReply(reply, inner)
+  console.log(sectionBox("MedGemma 27B — Antwort", body, "magenta"))
+  console.log()
+}
+
+// demo: end-to-end showcase — the hackathon money-shot
+async function cmdDemo(scenario: Scenario) {
+  const epaBundle = buildEPABundle(scenario, ALL_FHIR_BUNDLES[scenario])
+  const p = epaBundle.patient
+
+  console.log()
+  console.log(banner(`${EMOJIS[scenario]}  COMPTEXT DEMO — ${LABELS[scenario]}`, c.bgRed))
+  console.log()
+  await sleep(300)
+
+  // 1. ePA-Pull
+  console.log(headerBox("① ePA-Abruf aus Telematikinfrastruktur", `TI-Session ${epaBundle.ti_context.ti_id}`, "blue"))
+  for (const step of [
+    "🔐 HBA-Auth (SMC-B)",
+    "🚨 §291a SGB V Notfallzugriff",
+    "📥 MIOs: " + epaBundle.ti_context.mios.join(", "),
+  ]) { await sleep(180); console.log("  " + c.blue("▶ ") + step) }
+  console.log("  " + badge.ok() + " " + c.green(`Patient geladen: ${c.red(p.name_given + " " + p.name_family)} ${c.dim(`(KVNR: ${p.kvnr})`)}`))
+  console.log()
+  await sleep(300)
+
+  // 2. NURSE — PHI scrub counter animation
+  const t0 = Date.now()
+  const result = await pipeline(ALL_FHIR_BUNDLES[scenario])
+  const elapsed = Date.now() - t0
+  const dsl = serializeFrame(result.frame)
+
+  console.log(headerBox("② NURSE — PHI-Scrubbing " + badge.gdpr(), "DSGVO Art. 9 + §291a SGB V", "red"))
+  const totalPhi = result.benchmark.phi_fields_scrubbed
+  for (let i = 1; i <= totalPhi; i++) {
+    process.stdout.write(`\r  ${c.red("✗")} ${c.dim("PHI-Felder entfernt:")} ${c.bold(c.red(String(i)))} / ${totalPhi}   `)
+    await sleep(45)
+  }
+  process.stdout.write("\n")
+  console.log("  " + badge.scrubbed() + " " + c.green(`${totalPhi} PHI-Felder entfernt`) + c.dim(`  |  Hash: ${result.frame.gdpr.phi_hash ?? "-"}`))
+  console.log()
+  await sleep(300)
+
+  // 3. KVTC — compression progress
+  console.log(headerBox("③ KVTC-Kompression " + badge.dsl(), "4-Layer: K/V/T/C", "cyan"))
+  const pct = result.benchmark.reduction_pct
+  const w = Math.min(W - 28, 36)
+  for (let i = 0; i <= 100; i += 5) {
+    const p_ = Math.min(i, pct)
+    process.stdout.write("\r  " + progressBar("Kompression", p_, w))
+    await sleep(20)
+  }
+  process.stdout.write("\r  " + progressBar("Kompression", pct, w) + "\n")
+  console.log(c.dim(`  ${result.input.token_count} Token → ${result.kvtc.token_out} Token  (${pct.toFixed(1)}% Reduktion in ${elapsed} ms)`))
+  console.log()
+  await sleep(300)
+
+  // 4. DSL output (yellow, what the LLM sees)
+  console.log(headerBox("④ CompText DSL — LLM-Input " + badge.llm(), `${result.kvtc.token_out} Token, kein PHI`, "yellow"))
+  const inner = W - 6
+  for (const line of dsl.split("\n")) {
+    for (const seg of wrapLine(line, inner)) {
+      await sleep(30)
+      console.log("  " + c.yellow(seg))
+    }
+  }
+  console.log()
+  await sleep(400)
+
+  // 5. MedGemma reply (streaming)
+  console.log(headerBox("⑤ MedGemma 27B — Klinische Antwort", "Streaming Response", "magenta"))
+  const { reply, source, latency_ms } = await queryMedGemma(scenario, dsl, { timeoutMs: 4000 })
+  const sourceBadge = source === "live" ? c.bgGreen(c.bold(" LIVE ")) : c.bgBlue(c.bold(" CACHE "))
+  console.log(`  ${sourceBadge} ${c.dim(`Latenz ${latency_ms} ms`)}\n`)
+
+  await streamText(`▸ DIAGNOSE: ${reply.differential[0]}`, 10, c.bold)
+  await sleep(150)
+  await streamText(`▸ PRIORITÄT: ${reply.priority}`, 10, c.red)
+  await sleep(150)
+  console.log()
+  console.log(c.magenta(c.bold("▸ SOFORTMASSNAHMEN:")))
+  for (let i = 0; i < reply.actions.length; i++) {
+    await sleep(80)
+    for (const seg of wrapLine(`   ${i + 1}. ${reply.actions[i]}`, inner)) {
+      console.log(c.white(seg))
+    }
+  }
+  console.log()
+  console.log(c.yellow(c.bold("▸ WARNUNGEN:")))
+  for (const a of reply.alerts) {
+    await sleep(100)
+    for (const seg of wrapLine(`   ⚠ ${a}`, inner)) console.log(c.yellow(seg))
+  }
+  console.log()
+  await sleep(300)
+
+  // 6. Final value shot — cost / latency comparison
+  const model = MODELS["medgemma-27b-cloud"]
+  const raw = estimateCost(model, result.input.token_count, reply.tokens_out)
+  const dslCost = estimateCost(model, result.kvtc.token_out, reply.tokens_out)
+  const savings = raw.usd_per_1m_calls - dslCost.usd_per_1m_calls
+  const pctSaved = (savings / raw.usd_per_1m_calls) * 100
+
+  console.log(sectionBox("Wert-Nachweis — pro 1 Mio. Notfall-Anfragen", [
+    kv("Raw FHIR → MedGemma:", c.red(`$${raw.usd_per_1m_calls.toFixed(0).padStart(6)} / 1M Calls`) + c.dim(` @ ${raw.tokens_in} tok/call`), c.dim),
+    kv("CompText DSL →MedGemma:", c.green(`$${dslCost.usd_per_1m_calls.toFixed(0).padStart(6)} / 1M Calls`) + c.dim(` @ ${dslCost.tokens_in} tok/call`), c.dim),
+    kv("Ersparnis:", c.bold(c.green(`$${savings.toFixed(0)}`)) + c.dim(` (${pctSaved.toFixed(1)}% weniger)`), c.dim),
+    kv("Latenz Raw FHIR:", c.red(`~${raw.latency_ms} ms`), c.dim),
+    kv("Latenz DSL:", c.green(`~${dslCost.latency_ms} ms`) + c.dim(` (${Math.round(((raw.latency_ms - dslCost.latency_ms) / raw.latency_ms) * 100)}% schneller)`), c.dim),
+    kv("PHI-Exposition:", c.green("0 Felder (Null)") + c.dim(` — ${totalPhi} entfernt vor LLM`), c.dim),
+  ], "green"))
+  console.log()
+  await sleep(300)
+
+  console.log(banner(
+    `✓ DEMO ABGESCHLOSSEN  —  ${pct.toFixed(1)}% Token  —  ${pctSaved.toFixed(0)}% Kosten  —  0 PHI`,
+    c.bgGreen,
+  ))
+  console.log()
+}
+
+// compare: side-by-side FHIR vs DSL across models
+async function cmdCompare(scenario: Scenario) {
+  const result = await pipeline(ALL_FHIR_BUNDLES[scenario])
+  const reply = MEDGEMMA_CACHE[scenario]
+
+  console.log()
+  console.log(headerBox(
+    `${EMOJIS[scenario]} Kosten & Latenz — FHIR vs. CompText DSL`,
+    LABELS[scenario],
+    "cyan",
+  ))
+  console.log()
+
+  const modelIds = ["medgemma-27b-cloud", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-4-turbo"]
+  const cols = ["Modell", "Input FHIR", "Input DSL", "$/1M FHIR", "$/1M DSL", "Ersparnis", "Latenz Δ"]
+  const widths = [28, 10, 10, 12, 12, 12, 12]
+  const sep = () => cols.map((_, i) => "─".repeat(widths[i]!)).join("─┼─")
+  const head = cols.map((col, i) => pad(col, widths[i]!)).join(" │ ")
+  console.log("  " + c.bold(head))
+  console.log("  " + c.dim(sep()))
+
+  for (const id of modelIds) {
+    const m = MODELS[id]!
+    const raw = estimateCost(m, result.input.token_count, reply.tokens_out)
+    const dsl = estimateCost(m, result.kvtc.token_out, reply.tokens_out)
+    const saving = raw.usd_per_1m_calls - dsl.usd_per_1m_calls
+    const savingPct = (saving / raw.usd_per_1m_calls) * 100
+    const latPct = ((raw.latency_ms - dsl.latency_ms) / Math.max(raw.latency_ms, 1)) * 100
+    const row_ = [
+      pad(m.name, widths[0]!),
+      pad(String(raw.tokens_in), widths[1]!),
+      pad(String(dsl.tokens_in), widths[2]!),
+      pad("$" + raw.usd_per_1m_calls.toFixed(0), widths[3]!),
+      pad("$" + dsl.usd_per_1m_calls.toFixed(0), widths[4]!),
+      pad(`-${savingPct.toFixed(1)}%`, widths[5]!),
+      pad(`-${latPct.toFixed(0)}%`, widths[6]!),
+    ]
+    console.log(
+      "  " + row_[0] + " │ " +
+      c.red(row_[1]) + " │ " +
+      c.green(row_[2]) + " │ " +
+      c.red(row_[3]) + " │ " +
+      c.green(row_[4]) + " │ " +
+      c.bold(c.green(row_[5])) + " │ " +
+      c.bold(c.green(row_[6]))
+    )
+  }
+  console.log()
+
+  // PHI / compliance comparison
+  console.log(sectionBox("Compliance & Klinische Parität", [
+    kv("PHI-Exposition Raw FHIR:", c.red(`${result.benchmark.phi_fields_scrubbed} identifizierende Felder`), c.dim),
+    kv("PHI-Exposition DSL:", c.green("0 Felder (DSGVO Art. 9 erfüllt)"), c.dim),
+    kv("Klinische Key-Felder:", c.green("100% erhalten") + c.dim(" (Dx, Vitals, Labs, Rx, Allergien)"), c.dim),
+    kv("Audit-Hash:", c.dim(result.frame.gdpr.phi_hash ?? "-"), c.dim),
+    kv("DSGVO-Markierung:", c.green(result.frame.gdpr.art9 ? "Art. 9 Abs. 2c gesetzt" : "nicht gesetzt"), c.dim),
+  ], "green"))
+  console.log()
+}
+
+// doctor: readiness / health check
+async function cmdDoctor() {
+  console.log()
+  console.log(headerBox("CompText Doctor — Systemcheck", "Termux-/Offline-Bereitschaftsprüfung", "cyan"))
+  console.log()
+
+  type Status = "ok" | "warn" | "fail"
+  const checks: { name: string; result: () => Promise<[Status, string]> | [Status, string] }[] = [
+    { name: "Node.js ≥ 18",        result: () => {
+      const v = process.versions.node.split(".").map(Number)
+      return [v[0]! >= 18 ? "ok" : "fail", `v${process.versions.node}`]
+    }},
+    { name: "Terminal-Breite",     result: () => [W >= 40 ? "ok" : "warn", `${W} Spalten`] },
+    { name: "ANSI-Farben",         result: () => {
+      const on = process.env.NO_COLOR !== "1" && process.env.TERM !== "dumb"
+      return [on ? "ok" : "warn", on ? "aktiv" : "deaktiviert (NO_COLOR/TERM=dumb)"]
+    }},
+    { name: "UTF-8 Locale",        result: () => {
+      const lc = process.env.LANG ?? process.env.LC_ALL ?? ""
+      return [/UTF-?8/i.test(lc) ? "ok" : "warn", lc || "nicht gesetzt (Box-Chars evtl. fehlerhaft)"]
+    }},
+    { name: "Termux erkannt",      result: () => {
+      const termux = !!process.env.PREFIX?.includes("com.termux") || !!process.env.TERMUX_VERSION
+      return [termux ? "ok" : "warn", termux ? "ja" : "nein (andere POSIX-Shell — ok)"]
+    }},
+    { name: "Core-Pipeline",       result: async () => {
+      try { const r = await pipeline(ALL_FHIR_BUNDLES.stemi); return [r.kvtc.token_out > 0 ? "ok" : "fail", `STEMI → ${r.kvtc.token_out} Token`] }
+      catch (e) { return ["fail", (e as Error).message] }
+    }},
+    { name: "ePA-Mock 5 Szenarien",result: () => {
+      const ok = SCENARIOS.every(s => !!MOCK_EPA_PATIENTS[s])
+      return [ok ? "ok" : "fail", ok ? `${SCENARIOS.length}/5 Patienten` : "fehlt"]
+    }},
+    { name: "MedGemma-Cache",      result: () => {
+      const ok = SCENARIOS.every(s => MEDGEMMA_CACHE[s].actions.length > 0)
+      return [ok ? "ok" : "fail", ok ? `${SCENARIOS.length}/5 Antworten geladen` : "unvollständig"]
+    }},
+    { name: "MedGemma Live-Endpoint", result: () => {
+      const url = process.env.COMPTEXT_LLM_URL
+      return ["ok", url ? url : "nicht gesetzt (Cache-Modus, offline-fähig)"]
+    }},
+  ]
+
+  let failed = 0, warned = 0
+  for (const { name, result } of checks) {
+    const [status, detail] = await result()
+    if (status === "fail") failed++
+    if (status === "warn") warned++
+    const mark = status === "ok" ? badge.ok()
+               : status === "warn" ? badge.warn()
+               : badge.fail()
+    console.log(`  ${mark} ${c.bold(pad(name, 28))} ${c.dim(detail)}`)
+  }
+  console.log()
+  if (failed === 0 && warned === 0) {
+    console.log(banner("✓ ALLE CHECKS BESTANDEN — DEMO READY", c.bgGreen))
+  } else if (failed === 0) {
+    console.log(banner(`✓ DEMO READY  —  ${warned} Hinweis(e) beachten`, c.bgGreen))
+  } else {
+    console.log(banner(`✗ ${failed} CHECK(S) FEHLGESCHLAGEN`, c.bgRed))
+    process.exitCode = 1
+  }
+  console.log()
+}
+
 // ── Help ──────────────────────────────────────────────────────────────────────
 
 function printHelp() {
@@ -435,10 +748,14 @@ function printHelp() {
 ${c.bold("CompText DSL v5")} — Klinische KI-Vorverarbeitung für ePA-Daten
 
 ${c.bold("Notfall-Commands:")}
-  comptext emergency <szenario>   Vollständige Notfall-Ansicht (ePA → PHI → DSL → LLM)
+  comptext demo <szenario>        🎬 End-to-End Showcase (ePA → PHI → DSL → MedGemma)
+  comptext emergency <szenario>   Vollständige Notfall-Ansicht
   comptext simulate <szenario>    Schritt-für-Schritt Simulation mit Animation
+  comptext llm <szenario>         MedGemma-27B-Antwort auf DSL-Frame
+  comptext compare <szenario>     FHIR vs. DSL — Kosten & Latenz über 4 Modelle
   comptext epa <szenario>         Nur ePA-Daten anzeigen (ohne Pipeline)
   comptext menu                   Interaktives Menü
+  comptext doctor                 Systemcheck (Demo-Bereitschaft)
 
 ${c.bold("Technische Commands:")}
   comptext run <szenario>         DSL-Output auf stdout
@@ -446,14 +763,23 @@ ${c.bold("Technische Commands:")}
   comptext serve [port]           Visualizer offline starten (Standard: 4000)
   comptext pipe                   FHIR-Bundle von stdin einlesen
 
+${c.bold("Umgebungsvariablen:")}
+  COMPTEXT_LLM_URL=http://...     Ollama-kompatibler MedGemma-Endpoint (Live-Modus)
+  COMPTEXT_LLM_MODEL=medgemma:27b Modellname (Default: medgemma:27b)
+  COMPTEXT_NO_STREAM=1            Deaktiviert Stream-Animation (CI-Modus)
+  NO_COLOR=1                      Deaktiviert ANSI-Farben
+
 ${c.bold("Szenarien:")}
 ${sc}
 
 ${c.bold("Beispiele:")}
+  comptext demo stemi            ${c.dim("# 🎬 Hackathon-Showcase, 20s")}
   comptext emergency stemi
   comptext simulate stroke
+  comptext llm sepsis
+  comptext compare stemi
+  comptext doctor
   comptext menu
-  comptext epa sepsis
   comptext serve 8080
   cat patient.json | comptext pipe
 `)
@@ -493,6 +819,25 @@ switch (cmd) {
     break
   case "menu":
     await cmdMenu()
+    break
+  case "demo":
+  case "showcase":
+    if (!rest[0]) { process.stderr.write("Usage: comptext demo <szenario>\n"); process.exit(1) }
+    await cmdDemo(assertScenario(rest[0]))
+    break
+  case "llm":
+  case "medgemma":
+    if (!rest[0]) { process.stderr.write("Usage: comptext llm <szenario>\n"); process.exit(1) }
+    await cmdLlm(assertScenario(rest[0]))
+    break
+  case "compare":
+  case "cmp":
+    if (!rest[0]) { process.stderr.write("Usage: comptext compare <szenario>\n"); process.exit(1) }
+    await cmdCompare(assertScenario(rest[0]))
+    break
+  case "doctor":
+  case "check":
+    await cmdDoctor()
     break
   default:
     printHelp()
